@@ -43,3 +43,10 @@ for course in me.courses:
             # the class without ever having to log into your blackboard.
 ```
 
+## TODO
+
+- Add exceptions
+
+- Think of better API design?
+
+- Moar examples!
