@@ -1,5 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
+import json
 from datetime import datetime, timezone
 import time
 
@@ -8,9 +9,10 @@ AUTHENTICATE_URL = BASE_URL + "/webapps/login/"
 BASE_API_URL = BASE_URL + "/learn/api/v1"
 
 ENDPOINTS = {
-    "courses"       : BASE_API_URL + "/users/_82232_1/memberships",
+    "user"          : BASE_URL + "/ultra/course",
+    "courses"       : BASE_API_URL + "/users/{user_id}/memberships",
     "course"        : BASE_API_URL + "/courses/",
-    "launch_session": BASE_API_URL + "/courses/{course_id}/collabultra/sessions/{session_id}/launch"
+    "launch_session": BASE_API_URL + "/courses/{course_id}/collabultra/sessions/{session_id}/launch",
 }
 
 def datetime_from_utc_to_local(utc_datetime):
@@ -22,6 +24,7 @@ def datetime_from_utc_to_local(utc_datetime):
 class SessionBlackBoard:
     def __init__(self, uid, password):
         self._courses = None
+        self._details = None
         self._cookies = self._login(uid, password)
 
     def _login(self, uid, password):
@@ -31,9 +34,6 @@ class SessionBlackBoard:
         data = {
             'user_id': uid,
             'password': password,
-            'login': 'Sign In',
-            'action': 'login',
-            'new_loc': '',
             'blackboard.platform.security.NonceUtil.nonce': nonce["value"]
         }
         login = requests.post(AUTHENTICATE_URL, cookies=login_page.cookies, data=data, allow_redirects=False)
@@ -41,6 +41,21 @@ class SessionBlackBoard:
 
     def course(self, course_id):
         return Course(course_id, self._cookies)
+
+    @property
+    def details(self):
+        if self._details is None:
+            self._details = self._get_details()
+        return self._details
+
+    def _get_details(self):
+        response = requests.get(ENDPOINTS["user"], cookies=self._cookies)
+        initials = "user: "
+        start = initials + '{"'
+        json_start = response.text.find(start) + len(initials)
+        json_end = json_start + response.text[json_start:].find("\n")
+        json_text = response.text[json_start:json_end-1]
+        return json.loads(json_text)
 
     @property
     def courses(self):
@@ -54,10 +69,37 @@ class SessionBlackBoard:
             ('includeCount', 'true'),
             ('limit', '10000'),
         )
-        response = requests.get(ENDPOINTS["courses"], params=params, cookies=self._cookies)
+        url = ENDPOINTS["courses"].format(user_id=self.details["id"])
+        response = requests.get(url, params=params, cookies=self._cookies)
         items = response.json()
         courses = [Course(item["courseId"], self._cookies) for item in items["results"]]
         return courses
+
+    def next_course(self):
+        mapping = {}
+        for course in self.courses:
+            session = course.next_session()
+            if session is not None:
+                mapping[course] = session
+        items = mapping.items()
+        if len(items) > 0:
+            return min(items, key=lambda x: x[1].next_occurrence()["startTime"])[0]
+        else:
+            return None
+
+    def next_session(self):
+        course = self.next_course()
+        if course is None:
+            return None
+        else:
+            return course.next_session()
+
+    def next_occurrence(self):
+        course = self.next_course()
+        if course is None:
+            return None
+        else:
+            return course.next_occurrence()
 
 
 class Course:
@@ -69,6 +111,16 @@ class Course:
 
     def __repr__(self):
         return "Course<(course_id={})>".format(self.course_id)
+
+    @property
+    def start_time(self):
+        session = self.next_session()
+        return session.start_time
+
+    @property
+    def end_time(self):
+        session = self.next_session()
+        return session.end_time
 
     @property
     def course(self):
@@ -118,6 +170,10 @@ class Course:
         else:
             return session.next_occurrence()
 
+    def join(self):
+        session = self.next_session()
+        return session.join()
+
 
 class Session:
     def __init__(self, session, course, cookies):
@@ -129,6 +185,17 @@ class Session:
         self.course = course
         self.session = session
         self._cookies = cookies
+
+    @property
+    def start_time(self):
+        occurrence = self.next_occurrence()
+        return datetime_from_utc_to_local(occurrence["startTime"])
+
+    @property
+    def end_time(self):
+        occurrence = self.next_occurrence()
+        return datetime_from_utc_to_local(occurrence["endTime"])
+
 
     def _parse_timestr(self, timestr):
         return datetime.fromisoformat(timestr.replace("Z", "+00:00"))
