@@ -1,0 +1,6 @@
+*.pyc
+__pycache__/
+.cache/
+bb_api.egg-info/
+build/
+dist/
